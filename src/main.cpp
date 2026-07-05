@@ -1,18 +1,12 @@
 #include <Common.h>
-
-#include <filament/FilamentAPI.h>
-#include <filament/Engine.h>
-
-//#include <spdlog/spdlog.h>
-
-using namespace filament;
+#include <filament_app/App.h>
+#include <iostream>
 
 int main() {
     F f;
-    //spdlog::info("spdlog works, x = {}", f.x);
+    std::cout << "start main, x = " << f.x << "\n";
 
-    Engine *engine = Engine::create();
-    engine->destroy(&engine);
+    filament_app::App app;
 
     return 0;
 }

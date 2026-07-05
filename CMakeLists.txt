@@ -47,41 +47,62 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         enable_testing()
     endif()
 
+    # SDL3 settings.
+    set(SDL_EXAMPLES OFF)
 
+    set(SDL_AUDIO OFF)
+    set(SDL_CAMERA OFF)
+    set(SDL_DIALOG OFF)
+    set(SDL_GPU OFF)
+    set(SDL_HAPTIC OFF)
+    set(SDL_HIDAPI OFF)
+    set(SDL_JOYSTICK OFF)
+    set(SDL_POWER OFF)
+    set(SDL_RENDER OFF)
+    set(SDL_SENSOR OFF)
+    set(SDL_VIDEO ON)
 
     message("")
 endif()
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-find_package(Filament "1.72.0" REQUIRED)
+
 
 include(cmake/FetchArchive.cmake)
 #set(FETCHCONTENT_QUIET OFF)
 
-# Import spdlog for logging utilities.
-#fetch_archive_declare(
-#    spdlog
-#    GIT_REPOSITORY https://github.com/gabime/spdlog
-#    GIT_TAG v1.16.0
-#)
-#list(APPEND FETCH_PENDING "spdlog")
+# Import Simple DirectMedia Layer for the window system and other utilities.
+fetch_archive_declare(
+    SDL3
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL
+    GIT_TAG release-3.2.26
+)
+list(APPEND FETCH_PENDING "SDL3")
+
+# Import Dear ImGui for GUI library.
+fetch_archive_declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui
+    GIT_TAG v1.92.5
+)
+list(APPEND FETCH_PENDING "imgui")
 
 # Populate all of the pending content.
-#foreach(CONTENT_NAME IN LISTS FETCH_PENDING)
-#    message(STATUS "Fetching sources for ${CONTENT_NAME}...")
-#    fetch_archive_make_available(${CONTENT_NAME})
-#    message("")
-#endforeach()
-#unset(FETCH_PENDING)
+foreach(CONTENT_NAME IN LISTS FETCH_PENDING)
+    message(STATUS "Fetching sources for ${CONTENT_NAME}...")
+    fetch_archive_make_available(${CONTENT_NAME})
+    message("")
+endforeach()
+unset(FETCH_PENDING)
 
-#include(cmake/ImGuiVulkan.cmake)
+include(cmake/ImGui.cmake)
 
 #add_library(filament STATIC IMPORTED)
 #set_target_properties(filament PROPERTIES
 #    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/filament-v1.72.0-windows/lib/x86_64/md/filament.lib")
 #target_include_directories(filament INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/filament-v1.72.0-windows/include")
 
-
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+find_package(Filament "1.72.0" REQUIRED)
 
 # Run the next CMakeLists file (builds the executable).
 add_subdirectory(src)

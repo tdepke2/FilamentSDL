@@ -4,6 +4,9 @@
 
 message(STATUS "TGD: start FindFilament")
 
+# FIXME: add each of the sub-libraries in a loop (or with a macro)? The list of these should be provided from the caller through a variable.
+# FIXME: add support and test on linux.
+
 # Currently only Windows is supported in this find script.
 
 # Search for Filament binaries in "extern/" (or download/extract them). Sets
