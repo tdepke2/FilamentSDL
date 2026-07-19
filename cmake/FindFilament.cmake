@@ -39,7 +39,7 @@ function(_filament_populate_content)
 
         list(GET DOWNLOAD_STATUS 0 DOWNLOAD_STATUS_CODE)
         list(GET DOWNLOAD_STATUS 1 DOWNLOAD_STATUS_ERR)
-        if(NOT DOWNLOAD_STATUS_CODE} EQUAL 0)
+        if(NOT ${DOWNLOAD_STATUS_CODE} EQUAL 0)
             message(FATAL_ERROR "FindFilament.cmake: failed to download file. ${DOWNLOAD_STATUS_ERR}")
         endif()
     endif()

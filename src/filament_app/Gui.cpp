@@ -1,17 +1,24 @@
 #include <filament_app/Gui.h>
 
-#include <backends/imgui_impl_sdl3.h>    // FIXME: in a change to ImGui.cmake I removed the backends, may need to add this back for SDL.
+#include <backends/imgui_impl_sdl3.h>
 #include <filament/Engine.h>
+#include <filament/Fence.h>
+#include <filament/IndexBuffer.h>
 #include <filament/Material.h>
+#include <filament/MaterialInstance.h>
+#include <filament/RenderableManager.h>
 #include <filament/Scene.h>
 #include <filament/Texture.h>
+#include <filament/VertexBuffer.h>
 #include <filament/View.h>
 #include <imgui.h>
 #include <utils/EntityManager.h>
 
+#include "../gen/res/filagui_resources.h"
+
 namespace filament_app {
 
-Gui::Gui(filament::Engine* engine) :
+Gui::Gui(SDL_Window* window, filament::Engine* engine) :
     engine_(engine) {
 
     using namespace filament;
@@ -20,13 +27,13 @@ Gui::Gui(filament::Engine* engine) :
     imGuiContext_ = ImGui::CreateContext();
     ImGui::SetCurrentContext(imGuiContext_);
 
+    // Use a generic rendering backend in ImGui as we will convert the draw commands into Filament objects.
+    ImGui_ImplSDL3_InitForOther(window);
+
     ImGui::StyleColorsDark();
 
-    const void* FILAGUI_RESOURCES_UIBLIT_DATA = nullptr;
-    size_t FILAGUI_RESOURCES_UIBLIT_SIZE = 0;
-
     material_ = Material::Builder()
-        .package(FILAGUI_RESOURCES_UIBLIT_DATA, FILAGUI_RESOURCES_UIBLIT_SIZE)
+        .package(FILAGUI_RESOURCES_GUIBLIT_DATA, FILAGUI_RESOURCES_GUIBLIT_SIZE)
         .build(*engine_);
 
     // Use the font file if provided, otherwise fall back to the default font.
@@ -48,7 +55,7 @@ Gui::Gui(filament::Engine* engine) :
     view_->setBlendMode(View::BlendMode::TRANSLUCENT);
     view_->setShadowingEnabled(false);
 
-    scene_ = engine->createScene();
+    scene_ = engine_->createScene();
 
     cameraEntity_ = em.create();
     camera_ = engine_->createCamera(cameraEntity_);
@@ -69,9 +76,23 @@ Gui::~Gui() {
     em.destroy(guiEntity_);
     em.destroy(cameraEntity_);
 
+    for (auto mi : materialInstances_) {
+        engine_->destroy(mi);
+    }
     engine_->destroy(material_);
     engine_->destroy(texture_);
+    for (auto vb : vertexBuffers_) {
+        engine_->destroy(vb);
+    }
+    for (auto ib : indexBuffers_) {
+        engine_->destroy(ib);
+    }
 
+    for (auto tex : imGuiTextures_) {
+        engine_->destroy(tex);
+    }
+
+    ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext(imGuiContext_);
 }
 
@@ -161,6 +182,178 @@ void Gui::processImGuiCommands(ImDrawData* commands, const ImGuiIO& io) {
 
     // FIXME: much more to do here...
     // basing this on filament's filamentapp and filagui code (the authoritative version) with the older filament-glfw-imgui code.
+
+    // Avoid rendering when minimized and scale coordinates for retina displays.
+    int fbwidth = static_cast<int>(io.DisplaySize.x * io.DisplayFramebufferScale.x);
+    int fbheight = static_cast<int>(io.DisplaySize.y * io.DisplayFramebufferScale.y);
+    if (fbwidth == 0 || fbheight == 0) {
+        return;
+    }
+    commands->ScaleClipRects(io.DisplayFramebufferScale);
+
+    // Ensure that we have enough vertex buffers and index buffers.
+    hasSynced_ = false;
+    createBuffers(commands->CmdListsCount);
+
+    // Count how many primitives we'll need, then create a Renderable builder.
+    size_t nPrims = 0;
+    std::unordered_map<uint64_t, MaterialInstance*> scissorRects;
+    for (int cmdListIndex = 0; cmdListIndex < commands->CmdListsCount; ++cmdListIndex) {
+        const ImDrawList* cmds = commands->CmdLists[cmdListIndex];
+        nPrims += cmds->CmdBuffer.size();
+    }
+    auto rbuilder = RenderableManager::Builder(nPrims);
+    rbuilder.boundingBox({{ 0, 0, 0 }, { 10000, 10000, 10000 }}).culling(false);
+
+    // Recreate the Renderable component and point it to the vertex buffers.
+    auto& rcm = engine_->getRenderableManager();
+    rcm.destroy(guiEntity_);
+    int bufferIndex = 0;
+    int primIndex = 0;
+    int materialIndex = 0;
+    for (int cmdListIndex = 0; cmdListIndex < commands->CmdListsCount; ++cmdListIndex) {
+        const ImDrawList* cmds = commands->CmdLists[cmdListIndex];
+        populateVertexData(
+            bufferIndex,
+            cmds->VtxBuffer.Size * sizeof(ImDrawVert), cmds->VtxBuffer.Data,
+            cmds->IdxBuffer.Size * sizeof(ImDrawIdx), cmds->IdxBuffer.Data
+        );
+        for (const auto& pcmd : cmds->CmdBuffer) {
+            if (pcmd.UserCallback) {
+                pcmd.UserCallback(cmds, &pcmd);
+            } else {
+                auto texture = reinterpret_cast<Texture const*>(pcmd.GetTexID());
+                MaterialInstance* materialInstance;
+
+                {
+                    if (materialIndex == materialInstances_.size()) {
+                        materialInstances_.push_back(material_->createInstance());
+                    }
+                    materialInstance = materialInstances_[materialIndex++];
+                }
+
+                auto scissorLeft = static_cast<uint32_t>(std::max(0.0f, pcmd.ClipRect.x));
+                auto scissorBottom = static_cast<uint32_t>(std::max(0.0f, fbheight - pcmd.ClipRect.w));
+                auto scissorWidth = static_cast<uint32_t>(pcmd.ClipRect.z - pcmd.ClipRect.x);
+                auto scissorHeight = static_cast<uint32_t>(pcmd.ClipRect.w - pcmd.ClipRect.y);
+                materialInstance->setScissor(scissorLeft, scissorBottom, scissorWidth, scissorHeight);
+                if (texture) {
+                    TextureSampler sampler(TextureSampler::MinFilter::LINEAR, TextureSampler::MagFilter::LINEAR);
+                    materialInstance->setParameter("albedo", texture, sampler);
+                } else {
+                    materialInstance->setParameter("albedo", texture_, sampler_);
+                }
+                rbuilder.geometry(
+                        primIndex, RenderableManager::PrimitiveType::TRIANGLES,
+                        vertexBuffers_[bufferIndex], indexBuffers_[bufferIndex],
+                        pcmd.IdxOffset, pcmd.ElemCount
+                    )
+                    .blendOrder(primIndex, primIndex)
+                    .material(primIndex, materialInstance);
+                ++primIndex;
+            }
+        }
+        ++bufferIndex;
+    }
+    if (commands->CmdListsCount > 0) {
+        rbuilder.build(*engine_, guiEntity_);
+    }
+}
+
+void Gui::syncThreads() {
+    if (!hasSynced_) {
+        // This is called only when ImGui needs to grow a vertex buffer, which occurs a few times
+        // after launching and rarely (if ever) after that.
+        filament::Fence::waitAndDestroy(engine_->createFence());
+        hasSynced_ = true;
+    }
+}
+
+void Gui::createVertexBuffer(size_t bufferIndex, size_t capacity) {
+    using namespace filament;
+
+    syncThreads();
+    engine_->destroy(vertexBuffers_[bufferIndex]);
+    vertexBuffers_[bufferIndex] = VertexBuffer::Builder()
+        .vertexCount(capacity)
+        .bufferCount(1)
+        .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT2, 0, sizeof(ImDrawVert))
+        .attribute(VertexAttribute::UV0, 0, VertexBuffer::AttributeType::FLOAT2, sizeof(math::float2), sizeof(ImDrawVert))
+        .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, 2 * sizeof(math::float2), sizeof(ImDrawVert))
+        .normalized(VertexAttribute::COLOR)
+        .build(*engine_);
+}
+
+void Gui::createIndexBuffer(size_t bufferIndex, size_t capacity) {
+    using namespace filament;
+
+    syncThreads();
+    engine_->destroy(indexBuffers_[bufferIndex]);
+    indexBuffers_[bufferIndex] = IndexBuffer::Builder()
+        .indexCount(capacity)
+        .bufferType(IndexBuffer::IndexType::USHORT)
+        .build(*engine_);
+}
+
+void Gui::createBuffers(int numRequiredBuffers) {
+    if (numRequiredBuffers > vertexBuffers_.size()) {
+        size_t previousSize = vertexBuffers_.size();
+        vertexBuffers_.resize(numRequiredBuffers, nullptr);
+        for (size_t i = previousSize; i < vertexBuffers_.size(); ++i) {
+            // Pick a reasonable starting capacity.
+            createVertexBuffer(i, 1000);
+        }
+    }
+    if (numRequiredBuffers > indexBuffers_.size()) {
+        size_t previousSize = indexBuffers_.size();
+        indexBuffers_.resize(numRequiredBuffers, nullptr);
+        for (size_t i = previousSize; i < indexBuffers_.size(); ++i) {
+            // Pick a reasonable starting capacity.
+            createIndexBuffer(i, 5000);
+        }
+    }
+}
+
+void Gui::populateVertexData(size_t bufferIndex, size_t vbSizeInBytes, void* vbImguiData, size_t ibSizeInBytes, void* ibImguiData) {
+    // Create a new vertex buffer if the size isn't large enough, then copy the ImGui data into
+    // a staging area since Filament's render thread might consume the data at any time.
+    size_t requiredVertCount = vbSizeInBytes / sizeof(ImDrawVert);
+    size_t capacityVertCount = vertexBuffers_[bufferIndex]->getVertexCount();
+    if (requiredVertCount > capacityVertCount) {
+        createVertexBuffer(bufferIndex, requiredVertCount);
+    }
+    size_t nVbBytes = requiredVertCount * sizeof(ImDrawVert);
+    void* vbFilamentData = malloc(nVbBytes);    // FIXME: wtf going on here
+    memcpy(vbFilamentData, vbImguiData, nVbBytes);
+    vertexBuffers_[bufferIndex]->setBufferAt(
+        *engine_, 0,
+        filament::VertexBuffer::BufferDescriptor(
+            vbFilamentData, nVbBytes,
+            [](void* buffer, size_t size, void* user) {
+                free(buffer);
+            }, nullptr
+        )
+    );
+
+    // Create a new index buffer if the size isn't large enough, then copy the ImGui data into
+    // a staging area since Filament's render thread might consume the data at any time.
+    size_t requiredIndexCount = ibSizeInBytes / 2;
+    size_t capacityIndexCount = indexBuffers_[bufferIndex]->getIndexCount();
+    if (requiredIndexCount > capacityIndexCount) {
+        createIndexBuffer(bufferIndex, requiredIndexCount);
+    }
+    size_t nIbBytes = requiredIndexCount * 2;
+    void* ibFilamentData = malloc(nIbBytes);
+    memcpy(ibFilamentData, ibImguiData, nIbBytes);
+    indexBuffers_[bufferIndex]->setBuffer(
+        *engine_,
+        filament::IndexBuffer::BufferDescriptor(
+            ibFilamentData, nIbBytes,
+            [](void* buffer, size_t size, void* user) {
+                free(buffer);
+            }, nullptr
+        )
+    );
 }
 
 }

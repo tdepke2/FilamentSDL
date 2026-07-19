@@ -6,7 +6,7 @@ include(cmake/CompileProperties.cmake)
 project(FilamentSDL
     VERSION 1.0
     DESCRIPTION "Filament with SDL and Dear ImGui"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # Check if this is the main project (not included with add_subdirectory).

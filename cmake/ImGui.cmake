@@ -18,10 +18,14 @@ add_library(imgui STATIC
     "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
     "${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp"
     "${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.h"
+
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.h"
 )
 add_library(imgui::imgui ALIAS imgui)
 
 target_include_directories(imgui PUBLIC "${imgui_SOURCE_DIR}")
+target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
 target_compile_features(imgui PUBLIC cxx_std_20)
 set_target_properties(imgui PROPERTIES CXX_EXTENSIONS OFF)

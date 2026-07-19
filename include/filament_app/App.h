@@ -9,6 +9,7 @@ namespace filament {
     class SwapChain;
     class Engine;
     class Renderer;
+    class View;
 }
 
 union SDL_Event;
@@ -24,6 +25,7 @@ public:
     ~App();
 
     Gui* getGui(); // FIXME: keep this inaccessible instead? this seems to make more sense. then Gui doesn't need to make App a friend.
+    filament::Engine* getEngine();
 
     void init();
     void processEvent(const SDL_Event* event);
@@ -31,7 +33,7 @@ public:
 
     void startGuiFrame();
     void endGuiFrame();
-    bool startRender();
+    bool startRender(filament::View* view);
 
 private:
     SDL_Window* window_ = nullptr;
