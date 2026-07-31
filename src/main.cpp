@@ -1,8 +1,12 @@
 #include <Common.h>
 #include <filament_app/App.h>
+#include <filament_app/Gui.h>
 #include <iostream>
 #include <SDL3/SDL.h>
 #include <imgui.h>
+
+#include <thread>
+#include <chrono>
 
 #include <filament/Camera.h>
 #include <filament/Engine.h>
@@ -41,6 +45,8 @@ int main() {
     filament_app::App app;
     app.init();
 
+    // Add a custom font. Can be skipped to use the default font.
+    //app.getGui()->addFontTTF("Roboto", const_cast<uint8_t*>(FILAGUI_RESOURCES_ROBOTO_MEDIUM_DATA), FILAGUI_RESOURCES_ROBOTO_MEDIUM_SIZE, 18);
 
     auto engine = app.getEngine();
     filament::View* view = engine->createView();
@@ -98,6 +104,11 @@ int main() {
             }
         }
 
+        if (!app.renderIsReady()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
         constexpr float ZOOM = 1.5f;
         const uint32_t w = 640;    // FIXME: just hardcode window size for now
         const uint32_t h = 480;
@@ -110,12 +121,12 @@ int main() {
         tcm.setTransform(tcm.getInstance(renderable),
             filament::math::mat4f::rotation(now, filament::math::float3{ 0, 0, 1 }));
 
-        app.startGuiFrame();
+        app.getGui()->startFrame();
 
         // Some ImGui UI to test.
         ImGui::ShowDemoWindow();
 
-        app.endGuiFrame();
+        app.getGui()->endFrame();
         app.startRender(view);
     }
 

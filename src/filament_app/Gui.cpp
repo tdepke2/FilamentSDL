@@ -36,18 +36,6 @@ Gui::Gui(SDL_Window* window, filament::Engine* engine) :
         .package(FILAGUI_RESOURCES_GUIBLIT_DATA, FILAGUI_RESOURCES_GUIBLIT_SIZE)
         .build(*engine_);
 
-    // Use the font file if provided, otherwise fall back to the default font.
-    //if (fontPath.isFile()) { // FIXME
-    //    io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 16.0f);
-    //}
-    createAtlasTexture();
-
-    // For default font, switch to NEAREST for pixel-perfect text.
-    //if (!fontPath.isFile()) {
-        sampler_ = TextureSampler(TextureSampler::MinFilter::NEAREST, TextureSampler::MagFilter::NEAREST);
-        material_->setDefaultParameter("albedo", texture_, sampler_);
-    //}
-
     auto& em = utils::EntityManager::get();
 
     view_ = engine_->createView();
@@ -96,15 +84,48 @@ Gui::~Gui() {
     ImGui::DestroyContext(imGuiContext_);
 }
 
-void Gui::createAtlasTexture() {
+ImFont* Gui::addFontTTF(const std::string& name, void* data, size_t dataSize, float fontSize, bool freeDataWhenDone) {
+    ImGui::SetCurrentContext(imGuiContext_);
+    customFont_ = true;
+
+    ImFontConfig fontConfig = {};
+    fontConfig.FontDataOwnedByAtlas = freeDataWhenDone;
+    std::memcpy(fontConfig.Name, name.c_str(), std::min(name.size() + 1, sizeof(fontConfig.Name)));
+    fontConfig.Name[sizeof(fontConfig.Name) - 1] = '\0';
+
+    return ImGui::GetIO().Fonts->AddFontFromMemoryTTF(data, static_cast<int>(dataSize), fontSize, &fontConfig);
+}
+
+void Gui::processEvent(const SDL_Event* event) {
+    ImGui::SetCurrentContext(imGuiContext_);
+    ImGui_ImplSDL3_ProcessEvent(event);  // FIXME: consume event?
+}
+
+void Gui::startFrame() {
+    ImGui::SetCurrentContext(imGuiContext_);
+    if (!ImGui::GetIO().Fonts->IsBuilt()) {
+        rebuildAtlasTexture();
+    }
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+}
+
+void Gui::endFrame() {
+    ImGui::Render();
+    processImGuiCommands(ImGui::GetDrawData(), ImGui::GetIO());
+}
+
+void Gui::rebuildAtlasTexture() {
     using namespace filament;
 
     ImGui::SetCurrentContext(imGuiContext_);
 
+    filament::Fence::waitAndDestroy(engine_->createFence());
     engine_->destroy(texture_);
-    unsigned char* pixels;
-    int width, height;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);    // FIXME: do we need a copy of the pixels? filament-glfw-imgui does this but it doesn't seem necessary.
+
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     size_t size = width * height * 4;
 
     texture_ = Texture::Builder()
@@ -115,27 +136,26 @@ void Gui::createAtlasTexture() {
         .sampler(Texture::Sampler::SAMPLER_2D)
         .build(*engine_);
 
-    Texture::PixelBufferDescriptor pb(pixels, size, Texture::Format::RGBA, Texture::Type::UBYTE);
-    texture_->setImage(*engine_, 0, std::move(pb));
+    void* pixelsCopy = malloc(size);
+    std::memcpy(pixelsCopy, pixels, size);
+    texture_->setImage(
+        *engine_, 0,
+        Texture::PixelBufferDescriptor(
+            pixelsCopy, size, Texture::Format::RGBA, Texture::Type::UBYTE,
+            [](void* buffer, size_t /*size*/, void* /*user*/) {
+                free(buffer);
+            }, nullptr
+        )
+    );
 
-    sampler_ = TextureSampler(TextureSampler::MinFilter::LINEAR, TextureSampler::MagFilter::LINEAR);
-    material_->setDefaultParameter("albedo", texture_, sampler_);
-}
-
-void Gui::processEvent(const SDL_Event* event) {
-    ImGui::SetCurrentContext(imGuiContext_);
-    ImGui_ImplSDL3_ProcessEvent(event);  // FIXME: consume event?
-}
-
-void Gui::startFrame() {
-    ImGui::SetCurrentContext(imGuiContext_);
-    ImGui_ImplSDL3_NewFrame();
-    ImGui::NewFrame();
-}
-
-void Gui::render() {
-    ImGui::Render();
-    processImGuiCommands(ImGui::GetDrawData(), ImGui::GetIO());
+    if (customFont_) {
+        sampler_ = TextureSampler(TextureSampler::MinFilter::LINEAR, TextureSampler::MagFilter::LINEAR);
+        material_->setDefaultParameter("albedo", texture_, sampler_);
+    } else {
+        // For default font, switch to NEAREST for pixel-perfect text.
+        sampler_ = TextureSampler(TextureSampler::MinFilter::NEAREST, TextureSampler::MagFilter::NEAREST);
+        material_->setDefaultParameter("albedo", texture_, sampler_);
+    }
 }
 
 void Gui::processImGuiCommands(ImDrawData* commands, const ImGuiIO& io) {
@@ -180,9 +200,6 @@ void Gui::processImGuiCommands(ImDrawData* commands, const ImGuiIO& io) {
         }
     }
 
-    // FIXME: much more to do here...
-    // basing this on filament's filamentapp and filagui code (the authoritative version) with the older filament-glfw-imgui code.
-
     // Avoid rendering when minimized and scale coordinates for retina displays.
     int fbwidth = static_cast<int>(io.DisplaySize.x * io.DisplayFramebufferScale.x);
     int fbheight = static_cast<int>(io.DisplaySize.y * io.DisplayFramebufferScale.y);
@@ -193,12 +210,12 @@ void Gui::processImGuiCommands(ImDrawData* commands, const ImGuiIO& io) {
 
     // Ensure that we have enough vertex buffers and index buffers.
     hasSynced_ = false;
-    createBuffers(commands->CmdListsCount);
+    createBuffers(commands->CmdLists.size());
 
     // Count how many primitives we'll need, then create a Renderable builder.
     size_t nPrims = 0;
     std::unordered_map<uint64_t, MaterialInstance*> scissorRects;
-    for (int cmdListIndex = 0; cmdListIndex < commands->CmdListsCount; ++cmdListIndex) {
+    for (int cmdListIndex = 0; cmdListIndex < commands->CmdLists.size(); ++cmdListIndex) {
         const ImDrawList* cmds = commands->CmdLists[cmdListIndex];
         nPrims += cmds->CmdBuffer.size();
     }
@@ -208,10 +225,10 @@ void Gui::processImGuiCommands(ImDrawData* commands, const ImGuiIO& io) {
     // Recreate the Renderable component and point it to the vertex buffers.
     auto& rcm = engine_->getRenderableManager();
     rcm.destroy(guiEntity_);
-    int bufferIndex = 0;
-    int primIndex = 0;
-    int materialIndex = 0;
-    for (int cmdListIndex = 0; cmdListIndex < commands->CmdListsCount; ++cmdListIndex) {
+    size_t bufferIndex = 0;
+    size_t primIndex = 0;
+    size_t materialIndex = 0;
+    for (int cmdListIndex = 0; cmdListIndex < commands->CmdLists.size(); ++cmdListIndex) {
         const ImDrawList* cmds = commands->CmdLists[cmdListIndex];
         populateVertexData(
             bufferIndex,
@@ -223,14 +240,10 @@ void Gui::processImGuiCommands(ImDrawData* commands, const ImGuiIO& io) {
                 pcmd.UserCallback(cmds, &pcmd);
             } else {
                 auto texture = reinterpret_cast<Texture const*>(pcmd.GetTexID());
-                MaterialInstance* materialInstance;
-
-                {
-                    if (materialIndex == materialInstances_.size()) {
-                        materialInstances_.push_back(material_->createInstance());
-                    }
-                    materialInstance = materialInstances_[materialIndex++];
+                if (materialIndex == materialInstances_.size()) {
+                    materialInstances_.push_back(material_->createInstance());
                 }
+                MaterialInstance* materialInstance = materialInstances_[materialIndex++];
 
                 auto scissorLeft = static_cast<uint32_t>(std::max(0.0f, pcmd.ClipRect.x));
                 auto scissorBottom = static_cast<uint32_t>(std::max(0.0f, fbheight - pcmd.ClipRect.w));
@@ -248,14 +261,14 @@ void Gui::processImGuiCommands(ImDrawData* commands, const ImGuiIO& io) {
                         vertexBuffers_[bufferIndex], indexBuffers_[bufferIndex],
                         pcmd.IdxOffset, pcmd.ElemCount
                     )
-                    .blendOrder(primIndex, primIndex)
+                    .blendOrder(primIndex, static_cast<uint16_t>(primIndex))
                     .material(primIndex, materialInstance);
                 ++primIndex;
             }
         }
         ++bufferIndex;
     }
-    if (commands->CmdListsCount > 0) {
+    if (!commands->CmdLists.empty()) {
         rbuilder.build(*engine_, guiEntity_);
     }
 }
@@ -269,7 +282,7 @@ void Gui::syncThreads() {
     }
 }
 
-void Gui::createVertexBuffer(size_t bufferIndex, size_t capacity) {
+void Gui::createVertexBuffer(size_t bufferIndex, uint32_t capacity) {
     using namespace filament;
 
     syncThreads();
@@ -284,7 +297,7 @@ void Gui::createVertexBuffer(size_t bufferIndex, size_t capacity) {
         .build(*engine_);
 }
 
-void Gui::createIndexBuffer(size_t bufferIndex, size_t capacity) {
+void Gui::createIndexBuffer(size_t bufferIndex, uint32_t capacity) {
     using namespace filament;
 
     syncThreads();
@@ -295,7 +308,7 @@ void Gui::createIndexBuffer(size_t bufferIndex, size_t capacity) {
         .build(*engine_);
 }
 
-void Gui::createBuffers(int numRequiredBuffers) {
+void Gui::createBuffers(size_t numRequiredBuffers) {
     if (numRequiredBuffers > vertexBuffers_.size()) {
         size_t previousSize = vertexBuffers_.size();
         vertexBuffers_.resize(numRequiredBuffers, nullptr);
@@ -320,16 +333,16 @@ void Gui::populateVertexData(size_t bufferIndex, size_t vbSizeInBytes, void* vbI
     size_t requiredVertCount = vbSizeInBytes / sizeof(ImDrawVert);
     size_t capacityVertCount = vertexBuffers_[bufferIndex]->getVertexCount();
     if (requiredVertCount > capacityVertCount) {
-        createVertexBuffer(bufferIndex, requiredVertCount);
+        createVertexBuffer(bufferIndex, static_cast<uint32_t>(requiredVertCount));
     }
     size_t nVbBytes = requiredVertCount * sizeof(ImDrawVert);
-    void* vbFilamentData = malloc(nVbBytes);    // FIXME: wtf going on here
-    memcpy(vbFilamentData, vbImguiData, nVbBytes);
+    void* vbFilamentData = malloc(nVbBytes);
+    std::memcpy(vbFilamentData, vbImguiData, nVbBytes);
     vertexBuffers_[bufferIndex]->setBufferAt(
         *engine_, 0,
         filament::VertexBuffer::BufferDescriptor(
             vbFilamentData, nVbBytes,
-            [](void* buffer, size_t size, void* user) {
+            [](void* buffer, size_t /*size*/, void* /*user*/) {
                 free(buffer);
             }, nullptr
         )
@@ -340,16 +353,16 @@ void Gui::populateVertexData(size_t bufferIndex, size_t vbSizeInBytes, void* vbI
     size_t requiredIndexCount = ibSizeInBytes / 2;
     size_t capacityIndexCount = indexBuffers_[bufferIndex]->getIndexCount();
     if (requiredIndexCount > capacityIndexCount) {
-        createIndexBuffer(bufferIndex, requiredIndexCount);
+        createIndexBuffer(bufferIndex, static_cast<uint32_t>(requiredIndexCount));
     }
     size_t nIbBytes = requiredIndexCount * 2;
     void* ibFilamentData = malloc(nIbBytes);
-    memcpy(ibFilamentData, ibImguiData, nIbBytes);
+    std::memcpy(ibFilamentData, ibImguiData, nIbBytes);
     indexBuffers_[bufferIndex]->setBuffer(
         *engine_,
         filament::IndexBuffer::BufferDescriptor(
             ibFilamentData, nIbBytes,
-            [](void* buffer, size_t size, void* user) {
+            [](void* buffer, size_t /*size*/, void* /*user*/) {
                 free(buffer);
             }, nullptr
         )

@@ -2,6 +2,7 @@
 #include <filament_app/Gui.h>
 
 #include <backend/DriverEnums.h>
+#include <filament/Camera.h>
 #include <filament/Engine.h>
 #include <filament/Renderer.h>
 #include <filament/SwapChain.h>
@@ -9,8 +10,6 @@
 #include <filament/Viewport.h>
 #include <iostream>
 #include <SDL3/SDL.h>
-#include <thread>
-#include <chrono>
 
 namespace filament_app {
 
@@ -39,6 +38,10 @@ filament::Engine* App::getEngine() {
 }
 
 void App::init() {
+    if (window_ != nullptr) {
+        std::cerr << "App::init() called more than once.\n";
+        abort();
+    }
     SDL_Init(SDL_INIT_EVENTS | SDL_INIT_VIDEO);
 
     std::cout << "TGD: create engine\n";
@@ -67,7 +70,7 @@ void App::init() {
     renderer_ = engine_->createRenderer();
     std::cout << "TGD: ready to render\n";
 
-    // FIXME: FilamentApp::Window::Window() creates cameras and views.
+    // FIXME: FilamentApp::Window::Window() creates cameras and views, runs configureCamerasForWindow().
 
     // FIXME: FilamentApp::run() does other nonsense after creating the window.
 
@@ -78,33 +81,25 @@ void App::processEvent(const SDL_Event* event) {
     gui_->processEvent(event);
 }
 
-bool App::run() {
-    // FIXME: what do?
-    return false;
-}
-
-void App::startGuiFrame() {
-    gui_->startFrame();
-}
-
-void App::endGuiFrame() {
-    gui_->render();
+bool App::renderIsReady() const {
+    return renderer_->shouldRenderFrame();
 }
 
 bool App::startRender(filament::View* view) {
-    if (renderer_->beginFrame(swapChain_)) {
-        static unsigned int frame = 0;
-        ++frame;
-        if (frame % 100 == 0) {
-            std::cout << "frame " << frame << "\n";
-        }
-        gui_->view_->setViewport({ 0, 0, 640, 480 });    // FIXME: again with the hardcoded window size. where should we set the viewport size, and what about projection? something isn't configured right as the gui is not rendering.
-        renderer_->render(gui_->view_);  // FIXME: accessor for view
-        renderer_->render(view);
-        renderer_->endFrame();
-    } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    if (!renderer_->beginFrame(swapChain_)) {
+        return false;
     }
+
+    static unsigned int frame = 0;
+    ++frame;
+    if (frame % 100 == 0) {
+        std::cout << "frame " << frame << "\n";
+    }
+    gui_->view_->setViewport({ 0, 0, 640, 480 });    // FIXME: again with the hardcoded window size. where should we set the viewport size, and what about projection?
+    gui_->camera_->setProjection(filament::Camera::Projection::ORTHO, 0.0, 640, 480, 0.0, 0.0, 1.0);
+    renderer_->render(view);
+    renderer_->render(gui_->view_);  // FIXME: accessor for view
+    renderer_->endFrame();
     return true;
 }
 

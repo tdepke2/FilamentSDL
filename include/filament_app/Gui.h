@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filament/TextureSampler.h>
+#include <string>
 #include <unordered_set>
 #include <utils/Entity.h>
 #include <vector>
@@ -18,6 +19,7 @@ namespace filament {
 }
 
 struct ImDrawData;
+struct ImFont;
 struct ImGuiIO;
 struct ImGuiContext;
 union SDL_Event;
@@ -30,17 +32,19 @@ public:
     Gui(SDL_Window* window, filament::Engine* engine);
     ~Gui();
 
-    void createAtlasTexture();
+    ImFont* addFontTTF(const std::string& name, void* data, size_t dataSize, float fontSize, bool freeDataWhenDone = false);
     void processEvent(const SDL_Event* event);
+    // Always prepare the gui frame before rendering. If using custom fonts then load them before starting the frame.
+    void startFrame();
+    void endFrame();
 
 private:
-    void startFrame();
-    void render();
+    void rebuildAtlasTexture();
     void processImGuiCommands(ImDrawData* commands, const ImGuiIO& io);
     void syncThreads();
-    void createVertexBuffer(size_t bufferIndex, size_t capacity);
-    void createIndexBuffer(size_t bufferIndex, size_t capacity);
-    void createBuffers(int numRequiredBuffers);
+    void createVertexBuffer(size_t bufferIndex, uint32_t capacity);
+    void createIndexBuffer(size_t bufferIndex, uint32_t capacity);
+    void createBuffers(size_t numRequiredBuffers);
     void populateVertexData(size_t bufferIndex, size_t vbSizeInBytes, void* vbImguiData, size_t ibSizeInBytes, void* ibImguiData);
 
     ImGuiContext* imGuiContext_ = nullptr;
@@ -52,6 +56,7 @@ private:
     std::vector<filament::MaterialInstance*> materialInstances_;
     filament::Texture* texture_ = nullptr;
     filament::TextureSampler sampler_;
+    bool customFont_ = false;
     bool hasSynced_ = false;
     std::unordered_set<filament::Texture*> imGuiTextures_;
 
