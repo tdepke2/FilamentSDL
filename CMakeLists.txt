@@ -75,6 +75,7 @@ fetch_archive_declare(
     SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL
     GIT_TAG release-3.2.26
+    GIT_SHALLOW TRUE
 )
 list(APPEND FETCH_PENDING "SDL3")
 
@@ -83,8 +84,18 @@ fetch_archive_declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui
     GIT_TAG v1.92.5
+    GIT_SHALLOW TRUE
 )
 list(APPEND FETCH_PENDING "imgui")
+
+# Import stb for various utilities like image loading.
+fetch_archive_declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb
+    GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20    # Latest version as of writing.
+    GIT_SHALLOW TRUE    # CMake docs say you can't combine this with a git hash, but it seems to work with GitHub repos (see uploadpack.allowReachableSHA1InWant).
+)
+list(APPEND FETCH_PENDING "stb")
 
 # Populate all of the pending content.
 foreach(CONTENT_NAME IN LISTS FETCH_PENDING)
@@ -95,6 +106,7 @@ endforeach()
 unset(FETCH_PENDING)
 
 include(cmake/ImGui.cmake)
+include(cmake/Stb.cmake)
 
 #add_library(filament STATIC IMPORTED)
 #set_target_properties(filament PROPERTIES

@@ -14,7 +14,7 @@
 #include <imgui.h>
 #include <utils/EntityManager.h>
 
-#include "../gen/res/filagui_resources.h"
+#include <generated/resources/filament_app.h>
 
 namespace filament_app {
 
@@ -33,7 +33,7 @@ Gui::Gui(SDL_Window* window, filament::Engine* engine) :
     ImGui::StyleColorsDark();
 
     material_ = Material::Builder()
-        .package(FILAGUI_RESOURCES_GUIBLIT_DATA, FILAGUI_RESOURCES_GUIBLIT_SIZE)
+        .package(FILAMENT_APP_GUIBLIT_DATA, FILAMENT_APP_GUIBLIT_SIZE)
         .build(*engine_);
 
     auto& em = utils::EntityManager::get();

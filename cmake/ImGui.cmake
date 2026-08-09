@@ -1,6 +1,6 @@
 # Dear ImGui does not provide CMake scripts for compiling its sources, so create
-# a target for it. Note that we do not select a backend as filament_app will
-# provide this.
+# a target for it. Note that we do not select a rendering backend as we will be
+# converting the draw data into filament objects.
 
 add_library(imgui STATIC
     "${imgui_SOURCE_DIR}/imconfig.h"
