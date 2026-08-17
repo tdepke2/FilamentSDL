@@ -66,14 +66,20 @@ set(FILAMENT_LIBS
     Bluegl
     Bluevk
     Camutils
+    Dracodec
     Filabridge
     Filaflat
+    Filamat
     Filament-iblprefilter
     Filameshio
     Geometry
+    Gltfio
+    Gltfio_core
     Ibl
     Ktxreader
+    Shaders
     Smol-v
+    Uberzlib
     Utils
     Zstd
 )
@@ -108,6 +114,11 @@ endforeach()
 
 find_package(OpenGL REQUIRED)
 target_link_libraries(Filament::Bluegl INTERFACE OpenGL::GL)
+
+if(WIN32)
+    # Needed for shlwapi.h
+    target_link_libraries(Filament::Utils INTERFACE Shlwapi)
+endif()
 
 # add_library(Filament::All INTERFACE IMPORTED)
 # target_link_libraries(Filament::All INTERFACE
