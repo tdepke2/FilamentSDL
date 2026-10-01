@@ -58,11 +58,9 @@ target_link_libraries(fsdl_src PUBLIC
     fsdl_filament_app
     Filament::Basis_transcoder
     Filament::Camutils
-    Filament::Filament-iblprefilter
     Filament::Filameshio
     Filament::Geometry
     Filament::Ktxreader
-    stb::stb
 )
 fsdl_add_cxx_properties(fsdl_src)
 

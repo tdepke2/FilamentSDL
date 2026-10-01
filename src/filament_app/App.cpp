@@ -1,7 +1,6 @@
 #include <filament_app/App.h>
 #include <filament_app/Gui.h>
 
-#include <backend/DriverEnums.h>
 #include <filament/Camera.h>
 #include <filament/Engine.h>
 #include <filament/Renderer.h>
@@ -13,8 +12,8 @@
 
 namespace filament_app {
 
-App::App() {
-
+App App::Builder::build() {
+    return App(*this);
 }
 
 App::~App() {
@@ -29,34 +28,29 @@ App::~App() {
     SDL_Quit();
 }
 
-Gui* App::getGui() {
-    return gui_.get();
-}
-
-filament::Engine* App::getEngine() {
-    return engine_;
-}
-
-void App::init() {
+void App::init(std::string title, uint32_t width, uint32_t height, bool resizable) {
     if (window_ != nullptr) {
         std::cerr << "App::init() called more than once.\n";
         abort();
     }
     SDL_Init(SDL_INIT_EVENTS | SDL_INIT_VIDEO);
 
-    std::cout << "TGD: create engine\n";
     engine_ = filament::Engine::Builder()
-        .backend(filament::Engine::Backend::VULKAN)
+        .backend(backend_)
+        .platform(platform_)
+        .featureLevel(featureLevel_)
         .build();
 
-    SDL_WindowFlags windowFlags = SDL_WINDOW_HIGH_PIXEL_DENSITY;  // FIXME: do we need vulkan window? SDL_WINDOW_VULKAN;// | SDL_WINDOW_RESIZABLE;
-    window_ = SDL_CreateWindow("Filament Test", 640, 480, windowFlags);
+    SDL_WindowFlags windowFlags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (resizable) {
+        windowFlags |= SDL_WINDOW_RESIZABLE;
+    }
+    window_ = SDL_CreateWindow(title.c_str(), width, height, windowFlags);
     if (window_ == nullptr) {
         std::cerr << "SDL failed to create window: " << SDL_GetError() << "\n";
         abort();
     }
 
-    std::cout << "TGD: create swapchain\n";
     void* nativeWindow = nullptr;
     #if defined(SDL_PLATFORM_WIN32)
         nativeWindow = SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
@@ -66,19 +60,53 @@ void App::init() {
         static_assert(false, "platform is not yet supported");
     #endif
     swapChain_ = engine_->createSwapChain(nativeWindow);  // FIXME: filamentapp uses flags: , filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
-    std::cout << "TGD: create renderer\n";
     renderer_ = engine_->createRenderer();
-    std::cout << "TGD: ready to render\n";
 
     // FIXME: FilamentApp::Window::Window() creates cameras and views, runs configureCamerasForWindow().
 
     // FIXME: FilamentApp::run() does other nonsense after creating the window.
-
-    gui_ = std::make_unique<Gui>(window_, engine_);
 }
 
-void App::processEvent(const SDL_Event* event) {
-    gui_->processEvent(event);
+Gui* App::createGui() {
+    if (gui_) {
+        std::cerr << "App::createGui() called more than once.\n";
+        abort();
+    }
+    gui_ = std::make_unique<Gui>(window_, engine_);
+    return gui_.get();
+}
+
+SDL_Window* App::getWindow() const {
+    return window_;
+}
+
+filament::Engine* App::getEngine() const {
+    return engine_;
+}
+
+Gui* App::getGui() const {
+    return gui_.get();
+}
+
+void App::getWindowSize(uint32_t* width, uint32_t* height) const {
+    int iw = 0, ih = 0;
+    SDL_GetWindowSize(window_, &iw, &ih);
+    *width = iw;
+    *height = ih;
+}
+
+void App::getWindowSizeInPixels(uint32_t* width, uint32_t* height) const {
+    int iw = 0, ih = 0;
+    SDL_GetWindowSizeInPixels(window_, &iw, &ih);
+    *width = iw;
+    *height = ih;
+}
+
+bool App::processEvent(const SDL_Event* event) {
+    if (gui_) {
+        return gui_->processEvent(event);
+    }
+    return false;
 }
 
 bool App::renderIsReady() const {
@@ -93,14 +121,20 @@ bool App::startRender(filament::View* view) {
     static unsigned int frame = 0;
     ++frame;
     if (frame % 100 == 0) {
-        std::cout << "frame " << frame << "\n";
+        std::cout << "frame " << frame << "\n";    // FIXME
     }
-    gui_->view_->setViewport({ 0, 0, 640, 480 });    // FIXME: again with the hardcoded window size. where should we set the viewport size, and what about projection?
-    gui_->camera_->setProjection(filament::Camera::Projection::ORTHO, 0.0, 640, 480, 0.0, 0.0, 1.0);
     renderer_->render(view);
-    renderer_->render(gui_->view_);  // FIXME: accessor for view
+    if (gui_) {
+        renderer_->render(gui_->getView());
+    }
     renderer_->endFrame();
     return true;
+}
+
+App::App(const Builder& builder) :
+    backend_(builder.backend_),
+    platform_(builder.platform_),
+    featureLevel_(builder.featureLevel_) {
 }
 
 }

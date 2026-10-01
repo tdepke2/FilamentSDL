@@ -1,17 +1,17 @@
 #include <filament_app/App.h>
 #include <filament_app/Gui.h>
+#include <filament_app/IBL.h>
 
 #include <camutils/Manipulator.h>
 #include <filament/Camera.h>
 #include <filament/Engine.h>
-#include <filament/IndirectLight.h>
 #include <filament/RenderableManager.h>
 #include <filament/Scene.h>
-#include <filament/Skybox.h>
 #include <filament/Texture.h>
+#include <filament/TransformManager.h>
 #include <filament/View.h>
 #include <filament/Viewport.h>
-#include <filament-iblprefilter/IBLPrefilterContext.h>
+#include <gltfio/Animator.h>
 #include <gltfio/AssetLoader.h>
 #include <gltfio/MaterialProvider.h>
 #include <gltfio/ResourceLoader.h>
@@ -19,122 +19,17 @@
 #include <utils/EntityManager.h>
 #include <utils/NameComponentManager.h>
 
+#include <chrono>
 #include <fstream>
 #include <imgui.h>
 #include <iostream>
 #include <set>
 #include <SDL3/SDL.h>
-#include <stb_image.h>
 
 #include <generated/resources/resources.h>
 
 namespace gltfio = filament::gltfio;
 namespace math = filament::math;
-
-
-
-static constexpr float IBL_INTENSITY = 30000.0f;
-
-struct IBL {
-    IBL(filament::Engine& engine) : mEngine(engine) {}
-    ~IBL();
-    bool loadFromEquirect(const std::string& path);
-
-    filament::Engine& mEngine;
-
-    filament::math::float3 mBands[9] = {};
-    bool mHasSphericalHarmonics = false;
-
-    filament::Texture* mTexture = nullptr;
-    filament::IndirectLight* mIndirectLight = nullptr;
-    filament::Texture* mSkyboxTexture = nullptr;
-    filament::Texture* mFogTexture = nullptr;
-    filament::Skybox* mSkybox = nullptr;
-};
-
-IBL::~IBL() {
-    mEngine.destroy(mIndirectLight);
-    mEngine.destroy(mTexture);
-    mEngine.destroy(mSkybox);
-    mEngine.destroy(mSkyboxTexture);
-    mEngine.destroy(mFogTexture);
-}
-
-bool IBL::loadFromEquirect(const std::string& path) {
-    int w = 0, h = 0;
-    int n = 0;
-    size_t size = 0;
-    void* data = nullptr;
-    void* user = nullptr;
-    filament::Texture::PixelBufferDescriptor::Callback destroyer{};
-
-    if (false/*path.getExtension() == "exr"*/) {
-        // ???
-    } else {
-        stbi_info(path.c_str(), &w, &h, nullptr);
-        // load image as float
-        size = w * h * sizeof(math::float3);
-        data = (math::float3*)stbi_loadf(path.c_str(), &w, &h, &n, 3);
-        destroyer = [](void* data, size_t, void*) {
-            stbi_image_free(data);
-        };
-    }
-
-    if (data == nullptr || n != 3) {
-        std::cerr << "Could not decode image " << std::endl;
-        destroyer(data, size, user);
-        return false;
-    }
-
-    if (w != h * 2) {
-        std::cerr << "not an equirectangular image!" << std::endl;
-        destroyer(data, size, user);
-        return false;
-    }
-
-    // now load texture
-    filament::Texture::PixelBufferDescriptor buffer(
-            data, size,filament::Texture::Format::RGB, filament::Texture::Type::FLOAT, destroyer, user);
-
-    filament::Texture* const equirect = filament::Texture::Builder()
-            .width((uint32_t)w)
-            .height((uint32_t)h)
-            .levels(0xff)
-            .format(filament::Texture::InternalFormat::R11F_G11F_B10F)
-            .sampler(filament::Texture::Sampler::SAMPLER_2D)
-            .usage(filament::Texture::Usage::DEFAULT | filament::Texture::Usage::GEN_MIPMAPPABLE)
-            .build(mEngine);
-
-    equirect->setImage(mEngine, 0, std::move(buffer));
-
-    IBLPrefilterContext context(mEngine);
-    IBLPrefilterContext::EquirectangularToCubemap equirectangularToCubemap(context);
-    IBLPrefilterContext::SpecularFilter specularFilter(context);
-    IBLPrefilterContext::IrradianceFilter irradianceFilter(context);
-
-    mSkyboxTexture = equirectangularToCubemap(equirect);
-
-    mEngine.destroy(equirect);
-
-    mTexture = specularFilter(mSkyboxTexture);
-
-    mFogTexture = irradianceFilter({ .generateMipmap = true }, mSkyboxTexture);
-    mFogTexture->generateMipmaps(mEngine);
-
-    mIndirectLight = filament::IndirectLight::Builder()
-            .reflections(mTexture)
-            .intensity(IBL_INTENSITY)
-            .build(mEngine);
-
-    mSkybox = filament::Skybox::Builder()
-            .environment(mSkyboxTexture)
-            .showSun(true)
-            .build(mEngine);
-
-    return true;
-}
-
-
 
 enum MaterialSource {
     JITSHADER,
@@ -154,15 +49,15 @@ static std::ifstream::pos_type getFileSize(const char* filename) {
 
 
 
-int main() {
-    filament_app::App app;
-    app.init();
+int main(int argc, char* argv[]) {
+    auto app = filament_app::App::Builder().build();
+    app.init("Filament Test");
+    auto gui = app.createGui();
 
     auto engine = app.getEngine();
     filament::View* view = engine->createView();
     filament::Scene* scene = engine->createScene();
 
-    view->setViewport({ 0, 0, 640, 480 });  // FIXME: just hardcode window size for now
     view->setScene(scene);
 
     auto camera = utils::EntityManager::get().create();
@@ -170,8 +65,7 @@ int main() {
     view->setCamera(cam);
 
     auto cameraMan = filament::camutils::Manipulator<float>::Builder()
-        .viewport(640, 480) // FIXME
-        .orbitHomePosition(2, 2, 2)
+        .orbitHomePosition(80, 80, 80)
         .build(filament::camutils::Mode::ORBIT);
 
 
@@ -187,7 +81,7 @@ int main() {
     }
 
     // Load asset.
-    const char* filename = "../filament/third_party/models/FlightHelmet/FlightHelmet.gltf";
+    const char* filename = argv[1];//"../filament/third_party/models/DamagedHelmet/DamagedHelmet.glb";
     auto assetLoader = gltfio::AssetLoader::create({ engine, materials, names });
     gltfio::FilamentAsset* asset = nullptr;
     gltfio::FilamentInstance* instance = nullptr;
@@ -202,7 +96,7 @@ int main() {
         // Consume the glTF file.
         std::ifstream in(filename, std::ifstream::binary | std::ifstream::in);
         std::vector<uint8_t> buffer(static_cast<unsigned long>(contentSize));
-        if (!in.read((char*) buffer.data(), contentSize)) {
+        if (!in.read(reinterpret_cast<char*>(buffer.data()), contentSize)) {
             std::cerr << "Unable to read " << filename << std::endl;
             exit(1);
         }
@@ -272,12 +166,32 @@ int main() {
             resourceLoader->setConfiguration(configuration);
         }
 
+        // Fetch the raw bytes and push them into ResourceLoader via
+        // addResourceData(). This pre-populates the cache and bypasses
+        // ResourceLoader's internal disk I/O.
+        /*for (size_t i = 0, c = asset->getResourceUriCount(); i < c; ++i) {
+            const char* uri = asset->getResourceUris()[i];
+            utils::Path uriPath = filename.getParent() + uri;
+            std::vector<uint8_t> buffer = app.rawAssetLoader->load(uriPath);
+            if (!buffer.empty()) {
+                auto* b = new std::vector<uint8_t>(std::move(buffer));
+                gltfio::ResourceLoader::BufferDescriptor desc(
+                    b->data(), b->size(),
+                    [](void*, size_t, void* user) {
+                        delete static_cast<std::vector<uint8_t>*>(user);
+                    },
+                    b
+                );
+                app.resourceLoader->addResourceData(uri, std::move(desc));
+            }
+        }*/
+
         if (!resourceLoader->asyncBeginLoad(asset)) {
             std::cerr << "Unable to start loading resources for " << filename << std::endl;
             exit(1);
         }
 
-        if (/*app->recomputeAabb*/true) {    // FIXME
+        if (/*app->recomputeAabb*/false) {    // FIXME
             asset->getInstance()->recomputeBoundingBoxes();
         }
 
@@ -294,7 +208,7 @@ int main() {
 
 
 
-    auto ibl = std::make_unique<IBL>(*engine);
+    auto ibl = std::make_unique<filament_app::IBL>(*engine);
     if (!ibl->loadFromEquirect("assets/environments/lightroom_14b.hdr")) {
         std::cerr << "Could not load the specified IBL." << std::endl;
         ibl.reset();
@@ -306,13 +220,28 @@ int main() {
         //ibl->mIndirectLight->setIntensity(100000);
     }
 
+    auto windowResized = [&app, &view, &cameraMan, &cam]() {
+        uint32_t renderWidth, renderHeight;
+        app.getWindowSizeInPixels(&renderWidth, &renderHeight);
 
+        view->setViewport({ 0, 0, renderWidth, renderHeight });
+        cameraMan->setViewport(renderWidth, renderHeight);
+
+        double focalLength = 28.0f;
+        double near = 0.1f;
+        double far = 100.0f;
+        double aspectRatio = static_cast<double>(renderWidth) / renderHeight;
+        cam->setLensProjection(focalLength, aspectRatio, near, far);
+    };
+    windowResized();
 
     SDL_Event event;
     bool closeWindow = false;
     while (!closeWindow) {
         while (SDL_PollEvent(&event)) {
-            app.processEvent(&event);
+            if (app.processEvent(&event)) {
+                continue;
+            }
 
             if (event.type == SDL_EVENT_QUIT) {
                 closeWindow = true;
@@ -322,6 +251,8 @@ int main() {
                 cameraMan->grabEnd();
             } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
                 cameraMan->grabUpdate(event.motion.x, -event.motion.y);
+            } else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
+                windowResized();
             }
         }
 
@@ -330,32 +261,75 @@ int main() {
             continue;
         }
 
-        double now = (double) SDL_GetPerformanceCounter() / SDL_GetPerformanceFrequency();
+        double now = static_cast<double>(SDL_GetPerformanceCounter()) / SDL_GetPerformanceFrequency();
 
 
 
-        const uint32_t w = 640;    // FIXME: just hardcode window size for now
-        const uint32_t h = 480;
-        double focalLength = 28.0f;
-        double near = 0.1f;
-        double far = 100.0f;
-        auto aspectRatio = (float) w / h;
-        cam->setLensProjection(focalLength, aspectRatio, near, far);
         //cam->lookAt({2, 2, 2}, {0, 0, 0}, {0, 1, 0});
-        filament::math::float3 eye, center, up;
+        math::float3 eye, center, up;
         cameraMan->getLookAt(&eye, &center, &up);
         cam->lookAt(eye, center, up);
 
 
 
-        app.getGui()->startFrame();
+        resourceLoader->asyncUpdateLoad();
+        names->gc();
+        assetLoader->gc();
+
+        static constexpr int kNumAvailable = 128;
+        utils::Entity renderables[kNumAvailable];
+        while (size_t numWritten = asset->popRenderables(renderables, kNumAvailable)) {
+            gltfio::FilamentAsset::SceneMask mask;
+            mask.reset();
+            mask.set(0);
+            asset->addEntitiesToScene(*scene, renderables, numWritten, mask);
+        }
+
+        if (true) { // animSettings.enabled
+            gltfio::Animator& animator = *instance->getAnimator();
+            const size_t animationCount = animator.getAnimationCount();
+            static double startTime = now;
+            double elapsedSeconds = now - startTime;  // NOTE: the animation must start from t 0 to interpolate correctly (bug?)
+            if (animationCount > 0) {
+                animator.applyAnimation(0, elapsedSeconds);
+            }
+            animator.updateBoneMatrices();
+        }
+
+        /*auto& tcm = engine->getTransformManager();
+        tcm.setTransform(tcm.getInstance(asset->getEntities()[0]),
+          math::mat4f::rotation(now,
+                  math::float3{ 0, 0, 1 }));*/
+
+
+
+        gui->startFrame();
 
         // Some ImGui UI to test.
         ImGui::ShowDemoWindow();
 
-        app.getGui()->endFrame();
+        if (ImGui::CollapsingHeader("Stats")) {
+            ImGui::Indent();
+            ImGui::Text("%zu entities in the asset", asset->getEntityCount());
+            ImGui::Text("%zu renderables (excluding UI)", scene->getRenderableCount());
+            ImGui::Text("%f time", now);
+            ImGui::Unindent();
+        }
+
+        gui->endFrame();
         app.startRender(view);
     }
+
+    resourceLoader->asyncCancelLoad();
+    assetLoader->destroyAsset(asset);
+    materials->destroyMaterials();
+    delete materials;
+    delete names;
+    delete resourceLoader;
+    delete stbDecoder;
+    delete ktxDecoder;
+    delete webpDecoder;
+    gltfio::AssetLoader::destroy(&assetLoader);
 
     engine->destroy(view);
     engine->destroy(scene);

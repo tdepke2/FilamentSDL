@@ -18,12 +18,14 @@ filament_resource_gen(
 set(FSDL_FILAMENT_APP_HEADERS
     App.h
     Gui.h
+    IBL.h
 )
 list(TRANSFORM FSDL_FILAMENT_APP_HEADERS PREPEND "${PROJECT_SOURCE_DIR}/include/filament_app/")
 
 add_library(fsdl_filament_app
     App.cpp
     Gui.cpp
+    IBL.cpp
     ${FSDL_FILAMENT_APP_HEADERS}
     ${RESGEN_SOURCE}
 )
@@ -44,10 +46,12 @@ target_link_libraries(fsdl_filament_app PUBLIC
     Filament::Filabridge
     Filament::Filaflat
     Filament::Filament
+    Filament::Filament-iblprefilter
     Filament::Smol-v
     Filament::Utils
     Filament::Zstd
-    SDL3::SDL3
     imgui::imgui
+    SDL3::SDL3
+    stb::stb
 )
 fsdl_add_cxx_properties(fsdl_filament_app)

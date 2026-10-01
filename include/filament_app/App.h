@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <backend/DriverEnums.h>
+#include <backend/Platform.h>
 #include <memory>
+#include <string>
 
 namespace filament {
     class SwapChain;
@@ -22,15 +25,46 @@ class Gui;
 
 class App {
 public:
-    App();
+    class Builder {
+    public:
+        Builder& backend(filament::backend::Backend backend) {
+            backend_ = backend;
+            return *this;
+        }
+        Builder& platform(filament::backend::Platform* platform) {
+            platform_ = platform;
+            return *this;
+        }
+        Builder& featureLevel(filament::backend::FeatureLevel featureLevel) {
+            featureLevel_ = featureLevel;
+            return *this;
+        }
+        App build();
+
+    private:
+        filament::backend::Backend backend_ = filament::backend::Backend::DEFAULT;
+        filament::backend::Platform* platform_ = nullptr;
+        filament::backend::FeatureLevel featureLevel_ = filament::backend::FeatureLevel::FEATURE_LEVEL_3;
+
+        friend class App;
+    };
+
+    App(const App& rhs) = delete;
+    App& operator=(const App& rhs) = delete;
     ~App();
 
-    Gui* getGui(); // FIXME: keep this inaccessible instead? this seems to make more sense. then Gui doesn't need to make App a friend.
-    // we could keep this accessible and allow app to instantiate the gui only if it is needed.
-    filament::Engine* getEngine();
+    void init(std::string title, uint32_t width = 640, uint32_t height = 480, bool resizable = true);
+    Gui* createGui();
 
-    void init();
-    void processEvent(const SDL_Event* event);
+    SDL_Window* getWindow() const;
+    filament::Engine* getEngine() const;
+    Gui* getGui() const;
+
+    void getWindowSize(uint32_t* width, uint32_t* height) const;
+    void getWindowSizeInPixels(uint32_t* width, uint32_t* height) const;
+
+    // Returns true if event was consumed (and should not be processed further).
+    bool processEvent(const SDL_Event* event);
 
     // Returns false if filament is not ready to render the frame yet (due to fps limiting).
     bool renderIsReady() const;
@@ -38,6 +72,12 @@ public:
     bool startRender(filament::View* view);
 
 private:
+    explicit App(const Builder& builder);
+
+    filament::backend::Backend backend_ = filament::backend::Backend::DEFAULT;
+    filament::backend::Platform* platform_ = nullptr;
+    filament::backend::FeatureLevel featureLevel_ = filament::backend::FeatureLevel::FEATURE_LEVEL_3;
+
     SDL_Window* window_ = nullptr;
     filament::Engine* engine_ = nullptr;
     filament::SwapChain* swapChain_ = nullptr;

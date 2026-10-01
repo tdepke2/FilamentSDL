@@ -32,13 +32,16 @@ public:
     Gui(SDL_Window* window, filament::Engine* engine);
     ~Gui();
 
+    filament::View* getView() const;
+
     ImFont* addFontTTF(const std::string& name, void* data, size_t dataSize, float fontSize, bool freeDataWhenDone = false);
-    void processEvent(const SDL_Event* event);
+    bool processEvent(const SDL_Event* event);
     // Always prepare the gui frame before rendering. If using custom fonts then load them before starting the frame.
     void startFrame();
     void endFrame();
 
 private:
+    void windowResized();
     void rebuildAtlasTexture();
     void processImGuiCommands(ImDrawData* commands, const ImGuiIO& io);
     void syncThreads();
@@ -48,6 +51,7 @@ private:
     void populateVertexData(size_t bufferIndex, size_t vbSizeInBytes, void* vbImguiData, size_t ibSizeInBytes, void* ibImguiData);
 
     ImGuiContext* imGuiContext_ = nullptr;
+    SDL_Window* window_ = nullptr;
     filament::Engine* engine_ = nullptr;
 
     std::vector<filament::VertexBuffer*> vertexBuffers_;
@@ -65,8 +69,6 @@ private:
     utils::Entity cameraEntity_;
     filament::Camera* camera_ = nullptr;
     utils::Entity guiEntity_;
-
-    friend class App;
 };
 
 } // namespace filament_app

@@ -1,6 +1,7 @@
 #include <filament_app/Gui.h>
 
 #include <backends/imgui_impl_sdl3.h>
+#include <filament/Camera.h>
 #include <filament/Engine.h>
 #include <filament/Fence.h>
 #include <filament/IndexBuffer.h>
@@ -11,7 +12,9 @@
 #include <filament/Texture.h>
 #include <filament/VertexBuffer.h>
 #include <filament/View.h>
+#include <filament/Viewport.h>
 #include <imgui.h>
+#include <SDL3/SDL.h>
 #include <utils/EntityManager.h>
 
 #include <generated/resources/filament_app.h>
@@ -19,6 +22,7 @@
 namespace filament_app {
 
 Gui::Gui(SDL_Window* window, filament::Engine* engine) :
+    window_(window),
     engine_(engine) {
 
     using namespace filament;
@@ -52,6 +56,8 @@ Gui::Gui(SDL_Window* window, filament::Engine* engine) :
     view_->setScene(scene_);
     guiEntity_ = em.create();
     scene_->addEntity(guiEntity_);
+
+    windowResized();
 }
 
 Gui::~Gui() {
@@ -84,6 +90,10 @@ Gui::~Gui() {
     ImGui::DestroyContext(imGuiContext_);
 }
 
+filament::View* Gui::getView() const {
+    return view_;
+}
+
 ImFont* Gui::addFontTTF(const std::string& name, void* data, size_t dataSize, float fontSize, bool freeDataWhenDone) {
     ImGui::SetCurrentContext(imGuiContext_);
     customFont_ = true;
@@ -96,9 +106,17 @@ ImFont* Gui::addFontTTF(const std::string& name, void* data, size_t dataSize, fl
     return ImGui::GetIO().Fonts->AddFontFromMemoryTTF(data, static_cast<int>(dataSize), fontSize, &fontConfig);
 }
 
-void Gui::processEvent(const SDL_Event* event) {
+bool Gui::processEvent(const SDL_Event* event) {
     ImGui::SetCurrentContext(imGuiContext_);
-    ImGui_ImplSDL3_ProcessEvent(event);  // FIXME: consume event?
+    ImGui_ImplSDL3_ProcessEvent(event);
+
+    if (event->type == SDL_EVENT_WINDOW_RESIZED) {
+        windowResized();
+        return false;
+    }
+
+    const auto& io = ImGui::GetIO();
+    return io.WantCaptureMouse || io.WantCaptureKeyboard;
 }
 
 void Gui::startFrame() {
@@ -113,6 +131,16 @@ void Gui::startFrame() {
 void Gui::endFrame() {
     ImGui::Render();
     processImGuiCommands(ImGui::GetDrawData(), ImGui::GetIO());
+}
+
+void Gui::windowResized() {
+    int iw = 0, ih = 0;
+    SDL_GetWindowSizeInPixels(window_, &iw, &ih);
+    uint32_t width = iw;
+    uint32_t height = ih;
+
+    view_->setViewport({ 0, 0, width, height });
+    camera_->setProjection(filament::Camera::Projection::ORTHO, 0.0, width, height, 0.0, 0.0, 1.0);
 }
 
 void Gui::rebuildAtlasTexture() {

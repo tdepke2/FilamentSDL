@@ -33,13 +33,11 @@ target_link_libraries(demo_engine PRIVATE
     Filament::Camutils
     Filament::Dracodec
     Filament::Filamat
-    Filament::Filament-iblprefilter
     Filament::Geometry
     Filament::Gltfio
     Filament::Gltfio_core
     Filament::Ktxreader
     Filament::Shaders
     Filament::Uberzlib
-    stb::stb
 )
 fsdl_add_cxx_properties(demo_engine)

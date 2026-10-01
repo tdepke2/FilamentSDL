@@ -83,7 +83,14 @@ set(FILAMENT_LIBS
     Utils
     Zstd
 )
-set(FILAMENT_LIBS_PATH "${Filament_ROOT_DIR}/lib/x86_64/mdd")
+
+if(USE_STATIC_CRT OR USE_STATIC_LIBCXX)
+    set(FILAMENT_LIBS_PATH "${Filament_ROOT_DIR}/lib/x86_64/mt")
+    set(FILAMENT_LIBS_PATH_DEBUG "${Filament_ROOT_DIR}/lib/x86_64/mtd")
+else()
+    set(FILAMENT_LIBS_PATH "${Filament_ROOT_DIR}/lib/x86_64/md")
+    set(FILAMENT_LIBS_PATH_DEBUG "${Filament_ROOT_DIR}/lib/x86_64/mdd")
+endif()
 set(FILAMENT_LIBS_PREFIX "")
 set(FILAMENT_LIBS_SUFFIX ".lib")
 
@@ -91,10 +98,14 @@ set(Filament_INCLUDE_DIR "${Filament_ROOT_DIR}/include")
 set(Filament_LIBRARY
     "${FILAMENT_LIBS_PATH}/${FILAMENT_LIBS_PREFIX}filament${FILAMENT_LIBS_SUFFIX}"
 )
+set(Filament_LIBRARY_DEBUG
+    "${FILAMENT_LIBS_PATH_DEBUG}/${FILAMENT_LIBS_PREFIX}filament${FILAMENT_LIBS_SUFFIX}"
+)
 
 add_library(Filament::Filament STATIC IMPORTED)
 set_target_properties(Filament::Filament PROPERTIES
     IMPORTED_LOCATION "${Filament_LIBRARY}"
+    IMPORTED_LOCATION_DEBUG "${Filament_LIBRARY_DEBUG}"
     INTERFACE_INCLUDE_DIRECTORIES "${Filament_INCLUDE_DIR}"
 )
 
@@ -105,6 +116,7 @@ function(filament_register_lib LIB_NAME)
     add_library(Filament::${LIB_NAME} STATIC IMPORTED)
     set_target_properties(Filament::${LIB_NAME} PROPERTIES
         IMPORTED_LOCATION "${FILAMENT_LIBS_PATH}/${FILAMENT_LIBS_PREFIX}${LIB_NAME_LOWER}${FILAMENT_LIBS_SUFFIX}"
+        IMPORTED_LOCATION_DEBUG "${FILAMENT_LIBS_PATH_DEBUG}/${FILAMENT_LIBS_PREFIX}${LIB_NAME_LOWER}${FILAMENT_LIBS_SUFFIX}"
     )
 endfunction()
 

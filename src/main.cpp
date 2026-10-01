@@ -1,5 +1,6 @@
 #include <filament_app/App.h>
 #include <filament_app/Gui.h>
+#include <filament_app/IBL.h>
 #include <iostream>
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -26,9 +27,6 @@
 #include <ktxreader/Ktx2Reader.h>
 #include <stb_image.h>
 #include <fstream>
-#include <image/LinearImage.h>
-#include <filament-iblprefilter/IBLPrefilterContext.h>
-#include <filament/IndirectLight.h>
 
 #include <generated/resources/resources.h>
 
@@ -65,123 +63,21 @@ static filament::Texture* loadNormalMap(filament::Engine* engine, const uint8_t*
     return normalMap;
 }
 
-static constexpr float IBL_INTENSITY = 30000.0f;
-
-struct IBL {
-    IBL(filament::Engine& engine) : mEngine(engine) {}
-    ~IBL();
-    bool loadFromEquirect(const std::string& path);
-
-    filament::Engine& mEngine;
-
-    filament::math::float3 mBands[9] = {};
-    bool mHasSphericalHarmonics = false;
-
-    filament::Texture* mTexture = nullptr;
-    filament::IndirectLight* mIndirectLight = nullptr;
-    filament::Texture* mSkyboxTexture = nullptr;
-    filament::Texture* mFogTexture = nullptr;
-    filament::Skybox* mSkybox = nullptr;
-};
-
-IBL::~IBL() {
-    mEngine.destroy(mIndirectLight);
-    mEngine.destroy(mTexture);
-    mEngine.destroy(mSkybox);
-    mEngine.destroy(mSkyboxTexture);
-    mEngine.destroy(mFogTexture);
-}
-
-bool IBL::loadFromEquirect(const std::string& path) {
-    int w = 0, h = 0;
-    int n = 0;
-    size_t size = 0;
-    void* data = nullptr;
-    void* user = nullptr;
-    filament::Texture::PixelBufferDescriptor::Callback destroyer{};
-
-    if (false/*path.getExtension() == "exr"*/) {
-        // ???
-    } else {
-        stbi_info(path.c_str(), &w, &h, nullptr);
-        // load image as float
-        size = w * h * sizeof(math::float3);
-        data = (math::float3*)stbi_loadf(path.c_str(), &w, &h, &n, 3);
-        destroyer = [](void* data, size_t, void*) {
-            stbi_image_free(data);
-        };
-    }
-
-    if (data == nullptr || n != 3) {
-        std::cerr << "Could not decode image " << std::endl;
-        destroyer(data, size, user);
-        return false;
-    }
-
-    if (w != h * 2) {
-        std::cerr << "not an equirectangular image!" << std::endl;
-        destroyer(data, size, user);
-        return false;
-    }
-
-    // now load texture
-    filament::Texture::PixelBufferDescriptor buffer(
-            data, size,filament::Texture::Format::RGB, filament::Texture::Type::FLOAT, destroyer, user);
-
-    filament::Texture* const equirect = filament::Texture::Builder()
-            .width((uint32_t)w)
-            .height((uint32_t)h)
-            .levels(0xff)
-            .format(filament::Texture::InternalFormat::R11F_G11F_B10F)
-            .sampler(filament::Texture::Sampler::SAMPLER_2D)
-            .usage(filament::Texture::Usage::DEFAULT | filament::Texture::Usage::GEN_MIPMAPPABLE)
-            .build(mEngine);
-
-    equirect->setImage(mEngine, 0, std::move(buffer));
-
-    IBLPrefilterContext context(mEngine);
-    IBLPrefilterContext::EquirectangularToCubemap equirectangularToCubemap(context);
-    IBLPrefilterContext::SpecularFilter specularFilter(context);
-    IBLPrefilterContext::IrradianceFilter irradianceFilter(context);
-
-    mSkyboxTexture = equirectangularToCubemap(equirect);
-
-    mEngine.destroy(equirect);
-
-    mTexture = specularFilter(mSkyboxTexture);
-
-    mFogTexture = irradianceFilter({ .generateMipmap = true }, mSkyboxTexture);
-    mFogTexture->generateMipmaps(mEngine);
-
-    mIndirectLight = filament::IndirectLight::Builder()
-            .reflections(mTexture)
-            .intensity(IBL_INTENSITY)
-            .build(mEngine);
-
-    mSkybox = filament::Skybox::Builder()
-            .environment(mSkyboxTexture)
-            .showSun(true)
-            .build(mEngine);
-
-    return true;
-}
-
 int main() {
-    filament_app::App app;
-    app.init();
+    auto app = filament_app::App::Builder().build();
+    app.init("Filament Test");
+    auto gui = app.createGui();
 
     // Add a custom font. Can be skipped to use the default font.
-    //app.getGui()->addFontTTF("Roboto", const_cast<uint8_t*>(RESOURCES_ROBOTO_MEDIUM_DATA), RESOURCES_ROBOTO_MEDIUM_SIZE, 18);
+    //gui->addFontTTF("Roboto", const_cast<uint8_t*>(RESOURCES_ROBOTO_MEDIUM_DATA), RESOURCES_ROBOTO_MEDIUM_SIZE, 18);
 
     auto engine = app.getEngine();
     filament::View* view = engine->createView();
     filament::Scene* scene = engine->createScene();
 
-    view->setViewport({ 0, 0, 640, 480 });  // FIXME: just hardcode window size for now
     view->setScene(scene);
 
     auto cameraMan = filament::camutils::Manipulator<float>::Builder()
-        .viewport(640, 480) // FIXME
         .orbitHomePosition(2, 2, 2)
         .build(filament::camutils::Mode::ORBIT);
 
@@ -328,7 +224,7 @@ int main() {
 
 
 
-    auto ibl = std::make_unique<IBL>(*engine);
+    auto ibl = std::make_unique<filament_app::IBL>(*engine);
     if (!ibl->loadFromEquirect("assets/environments/lightroom_14b.hdr")) {
         std::cerr << "Could not load the specified IBL." << std::endl;
         ibl.reset();
@@ -348,12 +244,28 @@ int main() {
     view->setCamera(cam);
 
 
+    auto windowResized = [&app, &view, &cameraMan, &cam]() {
+        uint32_t renderWidth, renderHeight;
+        app.getWindowSizeInPixels(&renderWidth, &renderHeight);
+
+        view->setViewport({ 0, 0, renderWidth, renderHeight });
+        cameraMan->setViewport(renderWidth, renderHeight);
+
+        double focalLength = 28.0f;
+        double near = 0.1f;
+        double far = 100.0f;
+        double aspectRatio = static_cast<double>(renderWidth) / renderHeight;
+        cam->setLensProjection(focalLength, aspectRatio, near, far);
+    };
+    windowResized();
 
     SDL_Event event;
     bool closeWindow = false;
     while (!closeWindow) {
         while (SDL_PollEvent(&event)) {
-            app.processEvent(&event);
+            if (app.processEvent(&event)) {
+                continue;
+            }
 
             if (event.type == SDL_EVENT_QUIT) {
                 closeWindow = true;
@@ -363,6 +275,8 @@ int main() {
                 cameraMan->grabEnd();
             } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
                 cameraMan->grabUpdate(event.motion.x, -event.motion.y);
+            } else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
+                windowResized();
             }
         }
 
@@ -371,28 +285,10 @@ int main() {
             continue;
         }
 
-        double now = (double) SDL_GetPerformanceCounter() / SDL_GetPerformanceFrequency();
+        double now = static_cast<double>(SDL_GetPerformanceCounter()) / SDL_GetPerformanceFrequency();
 
-        /*constexpr float ZOOM = 1.5f;
-        const uint32_t w = 640;    // FIXME: just hardcode window size for now
-        const uint32_t h = 480;
-        const float aspect = (float) w / h;
-        cam->setProjection(filament::Camera::Projection::ORTHO,
-            -aspect * ZOOM, aspect * ZOOM,
-            -ZOOM, ZOOM, 0, 1);*/
-        //auto& tcm = engine->getTransformManager();
-        //tcm.setTransform(tcm.getInstance(renderable),
-        //    filament::math::mat4f::rotation(now, filament::math::float3{ 0, 0, 1 }));
-
-        const uint32_t w = 640;    // FIXME: just hardcode window size for now
-        const uint32_t h = 480;
-        double focalLength = 28.0f;
-        double near = 0.1f;
-        double far = 100.0f;
-        auto aspectRatio = (float) w / h;
-        cam->setLensProjection(focalLength, aspectRatio, near, far);
         //cam->lookAt({2, 2, 2}, {0, 0, 0}, {0, 1, 0});
-        filament::math::float3 eye, center, up;
+        math::float3 eye, center, up;
         cameraMan->getLookAt(&eye, &center, &up);
         cam->lookAt(eye, center, up);
 
@@ -401,12 +297,12 @@ int main() {
         //tcm.setTransform(ti, transform * filament::math::mat4f::rotation(now, filament::math::float3{ 0, 1, 0 }));
 
 
-        app.getGui()->startFrame();
+        gui->startFrame();
 
         // Some ImGui UI to test.
         ImGui::ShowDemoWindow();
 
-        app.getGui()->endFrame();
+        gui->endFrame();
         app.startRender(view);
     }
 

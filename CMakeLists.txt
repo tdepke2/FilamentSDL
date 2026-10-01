@@ -47,6 +47,14 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
         enable_testing()
     endif()
 
+    # Link statically against c/c++ lib to avoid missing redistributables (dll not found errors).
+    # FIXME: unclear how to correctly implement this. see Filament top level cmake for example. newer cmake has an CMAKE_MSVC_RUNTIME_LIBRARY variable.
+    #if(WIN32)
+    #    option(USE_STATIC_CRT "Link against the static runtime libraries." ON)
+    #elseif(UNIX)
+    #    option(USE_STATIC_LIBCXX "Link against the static runtime libraries." ON)
+    #endif()
+
     # SDL3 settings.
     set(SDL_EXAMPLES OFF)
 
