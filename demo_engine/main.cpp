@@ -5,6 +5,7 @@
 #include <camutils/Manipulator.h>
 #include <filament/Camera.h>
 #include <filament/Engine.h>
+#include <filament/LightManager.h>
 #include <filament/RenderableManager.h>
 #include <filament/Scene.h>
 #include <filament/Texture.h>
@@ -16,10 +17,13 @@
 #include <gltfio/MaterialProvider.h>
 #include <gltfio/ResourceLoader.h>
 #include <gltfio/TextureProvider.h>
+#include <math/mat4.h>
+#include <math/vec3.h>
 #include <utils/EntityManager.h>
 #include <utils/NameComponentManager.h>
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <imgui.h>
 #include <iostream>
@@ -28,6 +32,7 @@
 
 #include <generated/resources/resources.h>
 
+namespace fs = std::filesystem;
 namespace gltfio = filament::gltfio;
 namespace math = filament::math;
 
@@ -42,11 +47,38 @@ static constexpr MaterialSource materialSource = JITSHADER;
 #define UBERARCHIVE_DEFAULT_DATA nullptr
 #define UBERARCHIVE_DEFAULT_SIZE 0
 
-static std::ifstream::pos_type getFileSize(const char* filename) {
-    std::ifstream in(filename, std::ifstream::ate | std::ifstream::binary);
-    return in.tellg();
+std::vector<uint8_t> loadFileBytes(const fs::path& filename) {
+    std::cout << "loadFileBytes for " << filename << "\n";
+    std::ifstream in(filename, std::ifstream::binary | std::ifstream::ate);
+    if (!in.is_open()) {
+        return {};
+    }
+
+    auto size = in.tellg();
+    if (size <= 0) {
+        return {};
+    }
+
+    in.seekg(0, std::ios::beg);
+    std::vector<uint8_t> buffer(static_cast<size_t>(size));
+    if (!in.read(reinterpret_cast<char*>(buffer.data()), size)) {
+        return {};
+    }
+
+    return buffer;
 }
 
+math::mat4f fitIntoUnitCube(const filament::Aabb& bounds, float zoffset) {
+    math::float3 minpt = bounds.min;
+    math::float3 maxpt = bounds.max;
+    float maxExtent;
+    maxExtent = std::max(maxpt.x - minpt.x, maxpt.y - minpt.y);
+    maxExtent = std::max(maxExtent, maxpt.z - minpt.z);
+    float scaleFactor = 2.0f / maxExtent;
+    math::float3 center = (minpt + maxpt) / 2.0f;
+    center.z += zoffset / scaleFactor;
+    return math::mat4f::scaling(math::float3(scaleFactor)) * math::mat4f::translation(-center);
+}
 
 
 int main(int argc, char* argv[]) {
@@ -62,10 +94,13 @@ int main(int argc, char* argv[]) {
 
     auto camera = utils::EntityManager::get().create();
     auto cam = engine->createCamera(camera);
+    cam->setExposure(16.0f, 1 / 125.0f, 100.0f);
     view->setCamera(cam);
 
     auto cameraMan = filament::camutils::Manipulator<float>::Builder()
-        .orbitHomePosition(80, 80, 80)
+        .targetPosition(0.0f, 0.0f, -4.0f)
+        .orbitHomePosition(0.0f, 0.0f, 1.0f)
+        .flightMoveDamping(15.0f)
         .build(filament::camutils::Mode::ORBIT);
 
 
@@ -73,38 +108,50 @@ int main(int argc, char* argv[]) {
     auto names = new utils::NameComponentManager(utils::EntityManager::get());
     engine->enableAccurateTranslations();
 
-    gltfio::MaterialProvider* materials = nullptr;
-    if (materialSource == JITSHADER) {
-        materials = gltfio::createJitShaderProvider(engine, false, {});  // FIXME: see FILAMENT_DISABLE_MATOPT in cmakelists, we will need something similar.
+    view->setShadowType(filament::ShadowType::PCF);
+    view->setVsmShadowOptions({ .anisotropy = 0 });
+    view->setDithering(filament::Dithering::TEMPORAL);
+    view->setAntiAliasing(filament::AntiAliasing::FXAA);
+    view->setMultiSampleAntiAliasingOptions({ .enabled = true, .sampleCount = 4 });
+    view->setAmbientOcclusionOptions({ .upsampling = filament::View::QualityLevel::HIGH, .enabled = true });
+    view->setBloomOptions({ .enabled = true });
+
+    auto sunlight = utils::EntityManager::get().create();
+    filament::LightManager::Builder(filament::LightManager::Type::SUN)
+        .color(filament::Color::toLinear<filament::ACCURATE>({ 0.98, 0.92, 0.89}))
+        .intensity(100000.0f)
+        .direction(normalize(math::float3(0.6, -1.0, -0.8)))
+        .castShadows(true)
+        .sunAngularRadius(0.545f)
+        .sunHaloSize(10.0f)
+        .sunHaloFalloff(80.0f)
+        .build(*engine, sunlight);
+    scene->addEntity(sunlight);
+
+    gltfio::MaterialProvider* matProvider = nullptr;
+    if constexpr (materialSource == JITSHADER) {
+        matProvider = gltfio::createJitShaderProvider(engine, false, {});  // FIXME: see FILAMENT_DISABLE_MATOPT in cmakelists, we will need something similar.
     } else {
-        materials = gltfio::createUbershaderProvider(engine, UBERARCHIVE_DEFAULT_DATA, UBERARCHIVE_DEFAULT_SIZE);
+        matProvider = gltfio::createUbershaderProvider(engine, UBERARCHIVE_DEFAULT_DATA, UBERARCHIVE_DEFAULT_SIZE);
     }
 
     // Load asset.
-    const char* filename = argv[1];//"../filament/third_party/models/DamagedHelmet/DamagedHelmet.glb";
-    auto assetLoader = gltfio::AssetLoader::create({ engine, materials, names });
+    auto filename = fs::path(argv[1]).make_preferred();//"../filament/third_party/models/DamagedHelmet/DamagedHelmet.glb";
+    auto filenameStr = filename.string();
+    auto assetLoader = gltfio::AssetLoader::create({ engine, matProvider, names });
     gltfio::FilamentAsset* asset = nullptr;
     gltfio::FilamentInstance* instance = nullptr;
     {
-        // Peek at the file size to allow pre-allocation.
-        const long contentSize = static_cast<long>(getFileSize(filename));
-        if (contentSize <= 0) {
-            std::cerr << "Unable to open " << filename << std::endl;
-            exit(1);
-        }
-
-        // Consume the glTF file.
-        std::ifstream in(filename, std::ifstream::binary | std::ifstream::in);
-        std::vector<uint8_t> buffer(static_cast<unsigned long>(contentSize));
-        if (!in.read(reinterpret_cast<char*>(buffer.data()), contentSize)) {
-            std::cerr << "Unable to read " << filename << std::endl;
+        std::vector<uint8_t> buffer = loadFileBytes(filename);
+        if (buffer.empty()) {
+            std::cerr << "Unable to open " << filename << "\n";
             exit(1);
         }
 
         // Parse the glTF file and create Filament entities.
-        asset = assetLoader->createAsset(buffer.data(), buffer.size());
+        asset = assetLoader->createAsset(buffer.data(), static_cast<uint32_t>(buffer.size()));
         if (!asset) {
-            std::cerr << "Unable to parse " << filename << std::endl;
+            std::cerr << "Unable to parse " << filename << "\n";
             exit(1);
         }
 
@@ -148,7 +195,7 @@ int main(int argc, char* argv[]) {
     {
         gltfio::ResourceConfiguration configuration = {};
         configuration.engine = engine;
-        configuration.gltfPath = filename;
+        configuration.gltfPath = filenameStr.c_str();
         configuration.normalizeSkinningWeights = true;
 
         if (!resourceLoader) {
@@ -169,25 +216,25 @@ int main(int argc, char* argv[]) {
         // Fetch the raw bytes and push them into ResourceLoader via
         // addResourceData(). This pre-populates the cache and bypasses
         // ResourceLoader's internal disk I/O.
-        /*for (size_t i = 0, c = asset->getResourceUriCount(); i < c; ++i) {
+        for (size_t i = 0, c = asset->getResourceUriCount(); i < c; ++i) {
             const char* uri = asset->getResourceUris()[i];
-            utils::Path uriPath = filename.getParent() + uri;
-            std::vector<uint8_t> buffer = app.rawAssetLoader->load(uriPath);
+            fs::path uriPath = filename.parent_path() / fs::path(uri).make_preferred();
+            std::vector<uint8_t> buffer = loadFileBytes(uriPath);
             if (!buffer.empty()) {
                 auto* b = new std::vector<uint8_t>(std::move(buffer));
                 gltfio::ResourceLoader::BufferDescriptor desc(
                     b->data(), b->size(),
-                    [](void*, size_t, void* user) {
+                    [](void* /*buffer*/, size_t /*size*/, void* user) {
                         delete static_cast<std::vector<uint8_t>*>(user);
                     },
                     b
                 );
-                app.resourceLoader->addResourceData(uri, std::move(desc));
+                resourceLoader->addResourceData(uri, std::move(desc));
             }
-        }*/
+        }
 
         if (!resourceLoader->asyncBeginLoad(asset)) {
-            std::cerr << "Unable to start loading resources for " << filename << std::endl;
+            std::cerr << "Unable to start loading resources for " << filename << "\n";
             exit(1);
         }
 
@@ -206,11 +253,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-
-
     auto ibl = std::make_unique<filament_app::IBL>(*engine);
     if (!ibl->loadFromEquirect("assets/environments/lightroom_14b.hdr")) {
-        std::cerr << "Could not load the specified IBL." << std::endl;
+        std::cerr << "Could not load the specified IBL.\n";
         ibl.reset();
     } else {
         //ibl->mSkybox->setLayerMask(0x7, 0x4);
@@ -218,6 +263,16 @@ int main(int argc, char* argv[]) {
         scene->setIndirectLight(ibl->mIndirectLight);
 
         //ibl->mIndirectLight->setIntensity(100000);
+    }
+
+    auto& tcm = engine->getTransformManager();
+    tcm.setTransform(tcm.getInstance(asset->getRoot()), fitIntoUnitCube(instance->getBoundingBox(), 4.0f));
+
+    scene->addEntities(asset->getLightEntities(), asset->getLightEntityCount());
+    auto& rcm = engine->getRenderableManager();
+    for (size_t i = 0, n = asset->getRenderableEntityCount(); i < n; ++i) {
+        auto ri = rcm.getInstance(asset->getRenderableEntities()[i]);
+        rcm.setScreenSpaceContactShadows(ri, true);
     }
 
     auto windowResized = [&app, &view, &cameraMan, &cam]() {
@@ -246,11 +301,13 @@ int main(int argc, char* argv[]) {
             if (event.type == SDL_EVENT_QUIT) {
                 closeWindow = true;
             } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-                cameraMan->grabBegin(event.button.x, -event.button.y, false);
+                cameraMan->grabBegin(static_cast<int>(event.button.x), static_cast<int>(-event.button.y), false);
             } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
                 cameraMan->grabEnd();
             } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
-                cameraMan->grabUpdate(event.motion.x, -event.motion.y);
+                cameraMan->grabUpdate(static_cast<int>(event.motion.x), static_cast<int>(-event.motion.y));
+            } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+                cameraMan->scroll(0, 0, event.wheel.y * -20.0f);
             } else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
                 windowResized();
             }
@@ -289,7 +346,7 @@ int main(int argc, char* argv[]) {
             gltfio::Animator& animator = *instance->getAnimator();
             const size_t animationCount = animator.getAnimationCount();
             static double startTime = now;
-            double elapsedSeconds = now - startTime;  // NOTE: the animation must start from t 0 to interpolate correctly (bug?)
+            float elapsedSeconds = static_cast<float>(now - startTime);  // NOTE: the animation must start from t 0 to interpolate correctly (bug?)
             if (animationCount > 0) {
                 animator.applyAnimation(0, elapsedSeconds);
             }
@@ -322,8 +379,9 @@ int main(int argc, char* argv[]) {
 
     resourceLoader->asyncCancelLoad();
     assetLoader->destroyAsset(asset);
-    materials->destroyMaterials();
-    delete materials;
+    matProvider->destroyMaterials();
+    engine->destroy(sunlight);
+    delete matProvider;
     delete names;
     delete resourceLoader;
     delete stbDecoder;
