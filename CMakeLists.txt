@@ -122,7 +122,7 @@ include(cmake/Stb.cmake)
 #target_include_directories(filament INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/filament-v1.72.0-windows/include")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-find_package(Filament "1.75.0" REQUIRED)
+find_package(Filament "1.78.0" REQUIRED)
 
 # Run the next CMakeLists file (builds the executable).
 add_subdirectory(src)
